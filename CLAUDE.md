@@ -116,10 +116,12 @@ VITE_BASE44_APP_BASE_URL=https://[seu-app].base44.app
 
 | Secret | Obrigatório | Descrição |
 |---|---|---|
-| `PROD_PAT` | ✅ Sim | PAT do GitHub com `contents: write` no repo `Saas-Tecnica_Prod`. Permite que o CI/CD faça deploy no repo de produção. |
-| `ANTHROPIC_API_KEY` | ✅ Sim | Chave da API da Anthropic (Claude). Usada para analisar erros de build automaticamente. Gerar em: console.anthropic.com |
 | `HOMOLOG_API_URL` | ⏳ Quando pronto | URL do endpoint de homologação. Deve receber POST e retornar HTTP 200 se aprovado. |
 | `HOMOLOG_API_TOKEN` | ⏳ Quando pronto | Token Bearer para autenticar no endpoint de homologação. |
+| `NOTIFY_API_URL` | ⏳ Quando pronto | URL do endpoint que recebe o aviso quando um build é aprovado. |
+| `NOTIFY_API_TOKEN` | ⏳ Quando pronto | Token Bearer para a API de notificação. |
+
+> ℹ️ Não há deploy automático para outro repositório. Quando aprovado, o pipeline apenas notifica a API configurada em `NOTIFY_API_URL`.
 
 ---
 
@@ -155,19 +157,22 @@ Push → main
   ├─ Job: build
   │   ├─ npm ci
   │   ├─ npm run lint
-  │   └─ npm run build  ──── salva dist/ como artifact
+  │   └─ npm run build
   │         │ (se falhar)
-  │         └─► Job: analyze-error
-  │                └─ Claude API analisa o log e posta no GitHub Summary
+  │         └─► cria Issue com label ci-error
+  │               └─► task no Cowork detecta e traz para correção
   │
-  ├─ Job: homologacao  (após build OK)
+  ├─ Job: homologacao  (após build OK, push para main)
   │   └─ POST para HOMOLOG_API_URL
   │       ├─ HTTP 200 → aprovado
-  │       └─ outro código → pipeline para, não faz deploy
+  │       └─ outro código → pipeline para
   │
-  └─ Job: deploy  (após homologação OK)
-      └─ push do dist/ → Saas-Tecnica_Prod (force push, branch main)
+  └─ Job: notify  (após homologação OK)
+      └─ POST para NOTIFY_API_URL com event=build_approved
+          Payload: repo, commit, branch, actor, commit message, run_url
 ```
+
+> ⚠️ Não há deploy automático. A API de notificação recebe o aviso e decide o que fazer.
 
 ### Payload enviado para a API de homologação
 
@@ -195,7 +200,7 @@ O resultado aparece no **GitHub Actions Summary** do run com causa provável e a
 
 ---
 
-## 8. Temas e customização visual
+## 9. Temas e customização visual
 
 As variáveis do tema ficam em `src/index.css` (seção `:root`). Alterar lá reflete em todo o app:
 
@@ -212,7 +217,7 @@ Use o **Preview Interativo** (artifact do Cowork) para testar cores e labels ant
 
 ---
 
-## 9. Padrões de código
+## 10. Padrões de código
 
 - **Componentes**: functional components com hooks. Nenhum class component.
 - **Estilo**: apenas Tailwind classes + variáveis CSS do tema. Sem CSS inline (exceto valores dinâmicos calculados em JS).
@@ -224,7 +229,7 @@ Use o **Preview Interativo** (artifact do Cowork) para testar cores e labels ant
 
 ---
 
-## 10. Contexto para assistentes de IA
+## 11. Contexto para assistentes de IA
 
 Se você é um agente de IA trabalhando neste repositório, siga estas diretrizes:
 

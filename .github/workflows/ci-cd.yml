@@ -2,13 +2,15 @@
 # CI/CD Pipeline — Portal CRM (Saas-Tecnica)
 # Documentação: CLAUDE.md → Seção 7
 #
-# Quando falha: cria uma Issue com label ci-error.
-# O agente Claude (Cowork) detecta a issue e traz o erro para análise.
+# Quando falha:  cria Issue com label ci-error → agente Claude detecta
+#                e traz para o Cowork para correção
+# Quando passa:  chama API de notificação informando aprovação
 #
-# Secrets necessários (Settings → Secrets → Actions):
-#   PROD_PAT          → PAT com write em Saas-Tecnica_Prod
-#   HOMOLOG_API_URL   → Endpoint de homologação (opcional por ora)
-#   HOMOLOG_API_TOKEN → Token para o endpoint acima (opcional)
+# Secrets (Settings → Secrets → Actions):
+#   NOTIFY_API_URL    → endpoint que recebe o aviso de aprovação
+#   NOTIFY_API_TOKEN  → token Bearer para a API acima
+#   HOMOLOG_API_URL   → endpoint de homologação (opcional por ora)
+#   HOMOLOG_API_TOKEN → token para homologação
 # ─────────────────────────────────────────────────────────────────
 
 name: CI/CD Pipeline
@@ -68,8 +70,8 @@ jobs:
             echo "Msg:    $(git log -1 --pretty=%B)"
             echo "Arquivos alterados:"
             git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "(não disponível)"
-            echo "Lint:   ${{ steps.lint.outcome }}"
-            echo "Build:  ${{ steps.build.outcome }}"
+            echo "Lint:  ${{ steps.lint.outcome }}"
+            echo "Build: ${{ steps.build.outcome }}"
           } > /tmp/error-log.txt
           echo "has_error=true" >> $GITHUB_OUTPUT
 
@@ -83,30 +85,23 @@ jobs:
             const sha = context.sha.slice(0, 7);
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            // Fechar issues antigas de ci-error abertas para evitar acúmulo
             const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'ci-error',
-              state: 'open'
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: 'ci-error', state: 'open'
             });
             for (const issue of open) {
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
-                body: issue.body + '\n\n> ⚠️ Fechada automaticamente — novo erro gerado.'
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
+                body: issue.body + '\n\n> ⚠️ Fechada — novo erro gerado.'
               });
             }
 
             await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: context.repo.owner, repo: context.repo.repo,
               title: `❌ Build falhou — ${sha}`,
               body: [
-                `## Erro de CI/CD detectado`,
-                ``,
+                `## Erro de CI/CD`,
                 `| Campo | Valor |`,
                 `|---|---|`,
                 `| Commit | \`${context.sha}\` |`,
@@ -116,26 +111,16 @@ jobs:
                 `| Build | ${{ steps.build.outcome }} |`,
                 ``,
                 `### Log`,
-                `\`\`\``,
+                '```',
                 log,
-                `\`\`\``,
+                '```',
               ].join('\n'),
               labels: ['ci-error']
             });
 
-            console.log(`✅ Issue criada para o commit ${sha}`);
-
       - name: Falhar o job se houve erro
         if: steps.error-log.outputs.has_error == 'true'
         run: exit 1
-
-      - name: Upload dist
-        if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
 
   # ── JOB 2: Homologação ─────────────────────────────────────────
   homologacao:
@@ -145,6 +130,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.result == 'success'
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: API Check de Homologação
         id: api-check
         env:
@@ -170,67 +158,74 @@ jobs:
             }")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
-          echo "HTTP: $HTTP_CODE | Body: $BODY"
+          echo "HTTP: $HTTP_CODE"
+          [ "$HTTP_CODE" = "200" ] \
+            && echo "result=passed" >> $GITHUB_OUTPUT \
+            || { echo "result=failed" >> $GITHUB_OUTPUT; exit 1; }
 
-          [ "$HTTP_CODE" = "200" ] && echo "result=passed" >> $GITHUB_OUTPUT || { echo "result=failed" >> $GITHUB_OUTPUT; exit 1; }
-
-  # ── JOB 3: Deploy → Produção ───────────────────────────────────
-  deploy:
-    name: 🚀 Deploy → Produção
+  # ── JOB 3: Notificar aprovação ─────────────────────────────────
+  notify:
+    name: ✅ Notificar Aprovação
     runs-on: ubuntu-latest
     needs: [build, homologacao]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.homologacao.result == 'success'
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.build.result == 'success' &&
+      (needs.homologacao.result == 'success' || needs.homologacao.result == 'skipped')
 
     steps:
-      - name: Download dist
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Push para Saas-Tecnica_Prod
+      - name: Chamar API de notificação
         env:
-          PROD_PAT: ${{ secrets.PROD_PAT }}
+          NOTIFY_API_URL:   ${{ secrets.NOTIFY_API_URL }}
+          NOTIFY_API_TOKEN: ${{ secrets.NOTIFY_API_TOKEN }}
         run: |
-          [ -z "$PROD_PAT" ] && echo "❌ PROD_PAT não configurado" && exit 1
+          if [ -z "$NOTIFY_API_URL" ]; then
+            echo "⚠️  NOTIFY_API_URL não configurado — notificação pulada"
+            exit 0
+          fi
 
-          git config --global user.email "ci-bot@portalcrm"
-          git config --global user.name  "CI/CD Bot"
-          cd dist
-          git init
-          git remote add origin "https://x-access-token:${PROD_PAT}@github.com/TharlysSantos/Saas-Tecnica_Prod.git"
-          git checkout -b main
-          cat > .deploy-info.json << DEPEOF
-          {
-            "source_commit": "${{ github.sha }}",
-            "deployed_by":   "${{ github.actor }}",
-            "deployed_at":   "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
-            "run_id":        "${{ github.run_id }}"
-          }
-          DEPEOF
-          git add .
-          git commit -m "deploy: ${{ github.sha }} by ${{ github.actor }}"
-          git push --force origin main
-          echo "### 🚀 Deploy concluído" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          COMMIT_MSG=$(git log -1 --pretty=%B | head -1)
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -X POST "$NOTIFY_API_URL" \
+            -H "Authorization: Bearer $NOTIFY_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"event\":      \"build_approved\",
+              \"repo\":       \"${{ github.repository }}\",
+              \"commit\":     \"${{ github.sha }}\",
+              \"branch\":     \"${{ github.ref_name }}\",
+              \"actor\":      \"${{ github.actor }}\",
+              \"message\":    \"$COMMIT_MSG\",
+              \"run_id\":     \"${{ github.run_id }}\",
+              \"run_url\":    \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "Notificação enviada — HTTP $HTTP_CODE"
 
       - name: Fechar issue ci-error se existir
         uses: actions/github-script@v7
         with:
           script: |
             const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'ci-error',
-              state: 'open'
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: 'ci-error', state: 'open'
             });
             for (const issue of issues) {
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
-                body: issue.body + `\n\n> ✅ Resolvido no deploy \`${{ github.sha }}\``
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
+                body: issue.body + `\n\n> ✅ Resolvido — build aprovado em \`${{ github.sha }}\``
               });
             }
+
+      - name: Resumo
+        run: |
+          echo "### ✅ Build aprovado e API notificada" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Autor: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
