@@ -1,0 +1,187 @@
+# ─────────────────────────────────────────────────────────────────
+# CI/CD Pipeline — Saas-Tecnica
+#
+# Fluxo:
+#   push/PR → main
+#     1. Install + Lint + Build
+#     2. Homologação (API check — configurar secrets quando pronto)
+#     3. ✅ OK → push do dist/ para Saas-Tecnica_Prod
+#
+# Secrets necessários (Settings → Secrets → Actions):
+#   PROD_PAT          → PAT com write access em Saas-Tecnica_Prod
+#   HOMOLOG_API_URL   → URL do endpoint de homologação (opcional por ora)
+#   HOMOLOG_API_TOKEN → Token para o endpoint acima (opcional por ora)
+# ─────────────────────────────────────────────────────────────────
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ── JOB 1: Build & Lint ──────────────────────────────────────
+  build:
+    name: 🔨 Build & Lint
+    runs-on: ubuntu-latest
+
+    outputs:
+      build-success: ${{ steps.build.outcome == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        id: build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  # ── JOB 2: Homologação ───────────────────────────────────────
+  homologacao:
+    name: 🧪 Homologação
+    runs-on: ubuntu-latest
+    needs: build
+    # Só roda em push para main (não em PRs)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: API Check de Homologação
+        id: api-check
+        env:
+          HOMOLOG_API_URL:   ${{ secrets.HOMOLOG_API_URL }}
+          HOMOLOG_API_TOKEN: ${{ secrets.HOMOLOG_API_TOKEN }}
+        run: |
+          # ── Se o secret ainda não estiver configurado, passa direto ──
+          if [ -z "$HOMOLOG_API_URL" ]; then
+            echo "⚠️  HOMOLOG_API_URL não configurado — etapa pulada"
+            echo "result=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "🔍 Chamando API de homologação: $HOMOLOG_API_URL"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            --max-time 60 \
+            -X POST "$HOMOLOG_API_URL" \
+            -H "Authorization: Bearer $HOMOLOG_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"repo\":   \"${{ github.repository }}\",
+              \"commit\": \"${{ github.sha }}\",
+              \"branch\": \"${{ github.ref_name }}\",
+              \"actor\":  \"${{ github.actor }}\",
+              \"run_id\": \"${{ github.run_id }}\"
+            }")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP status : $HTTP_CODE"
+          echo "Response    : $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Homologação reprovou (HTTP $HTTP_CODE)"
+            echo "result=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ Homologação aprovada"
+          echo "result=passed" >> $GITHUB_OUTPUT
+
+      - name: Resumo da homologação
+        if: always()
+        run: |
+          RESULT="${{ steps.api-check.outputs.result }}"
+          case $RESULT in
+            passed)  echo "### ✅ Homologação aprovada" >> $GITHUB_STEP_SUMMARY ;;
+            skipped) echo "### ⚠️ Homologação não configurada (pulada)" >> $GITHUB_STEP_SUMMARY ;;
+            *)       echo "### ❌ Homologação reprovada" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Autor:  \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ── JOB 3: Deploy → Produção ─────────────────────────────────
+  deploy:
+    name: 🚀 Deploy → Produção
+    runs-on: ubuntu-latest
+    needs: [build, homologacao]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Push para Saas-Tecnica_Prod
+        env:
+          PROD_PAT: ${{ secrets.PROD_PAT }}
+        run: |
+          if [ -z "$PROD_PAT" ]; then
+            echo "❌ Secret PROD_PAT não configurado"
+            exit 1
+          fi
+
+          git config --global user.email "ci-bot@saas-tecnica"
+          git config --global user.name  "CI/CD Bot"
+
+          cd dist
+
+          git init
+          git remote add origin \
+            "https://x-access-token:${PROD_PAT}@github.com/TharlysSantos/Saas-Tecnica_Prod.git"
+
+          git checkout -b main
+
+          # Arquivo de rastreio do deploy
+          cat > .deploy-info.json << DEPEOF
+          {
+            "source_repo":   "${{ github.repository }}",
+            "source_commit": "${{ github.sha }}",
+            "deployed_by":   "${{ github.actor }}",
+            "deployed_at":   "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "run_id":        "${{ github.run_id }}"
+          }
+          DEPEOF
+
+          git add .
+          git commit -m "deploy: ${{ github.sha }}
+
+          Source:  ${{ github.repository }}@${{ github.ref_name }}
+          Commit:  ${{ github.sha }}
+          Author:  ${{ github.actor }}
+          Run:     https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          git push --force origin main
+
+          echo "### 🚀 Deploy concluído" >> $GITHUB_STEP_SUMMARY
+          echo "- Produção: https://github.com/TharlysSantos/Saas-Tecnica_Prod" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit:   \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
