@@ -17,8 +17,7 @@ import {
   Receipt,
   Lock,
   GitBranch,
-  BarChart2,
-  BookOpen
+  BarChart2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -36,7 +35,6 @@ const NAV_BY_ENV = {
     { name: "Relatórios", page: "Relatorios", icon: BarChart2 },
     { name: "Meu Perfil", page: "Profile", icon: User },
     { name: "Configurações", page: "Settings", icon: Settings },
-    { name: "Documentação", page: "Documentacao", icon: BookOpen },
   ],
   cobranca: [],
 };
