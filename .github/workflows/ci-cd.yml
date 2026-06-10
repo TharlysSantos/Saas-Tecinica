@@ -1,16 +1,12 @@
 # ─────────────────────────────────────────────────────────────────
-# CI/CD Pipeline — Saas-Tecnica
-#
-# Fluxo:
-#   push/PR → main
-#     1. Install + Lint + Build
-#     2. Homologação (API check — configurar secrets quando pronto)
-#     3. ✅ OK → push do dist/ para Saas-Tecnica_Prod
+# CI/CD Pipeline — Portal CRM (Saas-Tecnica)
+# Documentação completa: CLAUDE.md → Seção 7
 #
 # Secrets necessários (Settings → Secrets → Actions):
-#   PROD_PAT          → PAT com write access em Saas-Tecnica_Prod
-#   HOMOLOG_API_URL   → URL do endpoint de homologação (opcional por ora)
-#   HOMOLOG_API_TOKEN → Token para o endpoint acima (opcional por ora)
+#   PROD_PAT          → PAT com write em Saas-Tecnica_Prod
+#   ANTHROPIC_API_KEY → Claude API para análise de erros
+#   HOMOLOG_API_URL   → Endpoint de homologação (opcional por ora)
+#   HOMOLOG_API_TOKEN → Token para o endpoint acima (opcional)
 # ─────────────────────────────────────────────────────────────────
 
 name: CI/CD Pipeline
@@ -24,14 +20,11 @@ on:
 env:
   NODE_VERSION: '20'
 
+# ── JOB 1: Build & Lint ────────────────────────────────────────
 jobs:
-  # ── JOB 1: Build & Lint ──────────────────────────────────────
   build:
     name: 🔨 Build & Lint
     runs-on: ubuntu-latest
-
-    outputs:
-      build-success: ${{ steps.build.outcome == 'success' }}
 
     steps:
       - name: Checkout
@@ -47,45 +40,181 @@ jobs:
         run: npm ci
 
       - name: Lint
-        run: npm run lint
+        id: lint
+        run: |
+          npm run lint 2>&1 | tee /tmp/lint-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
       - name: Build
         id: build
-        run: npm run build
+        if: steps.lint.outputs.exit_code == '0'
+        run: |
+          npm run build 2>&1 | tee /tmp/build-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
-      - name: Upload build artifact
+      # Salva log de erro para o job de análise
+      - name: Salvar log de erro
+        if: steps.lint.outputs.exit_code != '0' || steps.build.outputs.exit_code != '0'
+        run: |
+          echo "=== LINT OUTPUT ===" > error-log.txt
+          cat /tmp/lint-output.txt >> error-log.txt 2>/dev/null || echo "(sem output)" >> error-log.txt
+          echo "" >> error-log.txt
+          echo "=== BUILD OUTPUT ===" >> error-log.txt
+          cat /tmp/build-output.txt >> error-log.txt 2>/dev/null || echo "(sem output)" >> error-log.txt
+          echo "" >> error-log.txt
+          echo "=== CONTEXTO ===" >> error-log.txt
+          echo "Commit: ${{ github.sha }}" >> error-log.txt
+          echo "Autor: ${{ github.actor }}" >> error-log.txt
+          echo "Mensagem: $(git log -1 --pretty=%B)" >> error-log.txt
+          echo "Arquivos alterados:" >> error-log.txt
+          git diff --name-only HEAD~1 HEAD 2>/dev/null >> error-log.txt || echo "(não disponível)" >> error-log.txt
+          echo "STATUS_LINT=${{ steps.lint.outputs.exit_code }}" >> error-log.txt
+          echo "STATUS_BUILD=${{ steps.build.outputs.exit_code }}" >> error-log.txt
+
+      - name: Upload log de erro
+        if: steps.lint.outputs.exit_code != '0' || steps.build.outputs.exit_code != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-log
+          path: error-log.txt
+          retention-days: 7
+
+      - name: Upload dist
+        if: steps.build.outputs.exit_code == '0'
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
           retention-days: 1
 
-  # ── JOB 2: Homologação ───────────────────────────────────────
+      # Falhar o job se lint ou build falharam
+      - name: Verificar resultado
+        if: steps.lint.outputs.exit_code != '0' || steps.build.outputs.exit_code != '0'
+        run: |
+          echo "❌ Pipeline falhou — lint: ${{ steps.lint.outputs.exit_code }} | build: ${{ steps.build.outputs.exit_code }}"
+          exit 1
+
+# ── JOB 2: Análise de erro com Claude ─────────────────────────
+  analyze-error:
+    name: 🔍 Análise de Erro
+    runs-on: ubuntu-latest
+    needs: build
+    if: failure() && needs.build.result == 'failure'
+
+    steps:
+      - name: Download log de erro
+        uses: actions/download-artifact@v4
+        with:
+          name: error-log
+          path: .
+
+      - name: Analisar com Claude API
+        id: analysis
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "⚠️ ANTHROPIC_API_KEY não configurado — análise pulada"
+            echo "analysis=API key não configurada. Adicione o secret ANTHROPIC_API_KEY para análise automática de erros." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          ERROR_LOG=$(cat error-log.txt | head -200)
+
+          PROMPT="Você é um assistente técnico analisando um erro de CI/CD de uma aplicação React + Vite chamada Portal CRM.
+
+          Analise o log de erro abaixo e responda em português de forma clara e objetiva. A pessoa que vai ler pode ser técnica ou não técnica — seja direto e explique bem.
+
+          Estruture a resposta exatamente assim:
+
+          **CATEGORIA**: [INTERNO | EXTERNO | CONFIGURAÇÃO]
+
+          **CAUSA**: Explique em 1-3 frases simples o que causou o erro. Mencione o arquivo e linha se estiver no log.
+
+          **O QUE SIGNIFICA**: Explique o que esse erro significa na prática, como se estivesse explicando para alguém que não é programador experiente.
+
+          **AÇÃO RECOMENDADA**: Liste os passos exatos para resolver. Seja específico — nada de 'verifique o código', diga exatamente o que verificar e onde.
+
+          **CONTEXTO**: Diga se é algo que bloqueia apenas o deploy (INTERNO) ou se pode estar afetando o sistema em produção agora (EXTERNO/CONFIGURAÇÃO).
+
+          Categorias:
+          - INTERNO = erro no código-fonte (lint, TypeScript, import errado, lógica)
+          - EXTERNO = serviço de terceiro com problema (API fora, CORS, timeout de rede)
+          - CONFIGURAÇÃO = secret faltando, variável de ambiente errada, configuração do projeto
+
+          LOG DE ERRO:
+          $ERROR_LOG"
+
+          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"claude-haiku-4-5-20251001\",
+              \"max_tokens\": 1024,
+              \"messages\": [{\"role\": \"user\", \"content\": $(echo "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}]
+            }")
+
+          ANALYSIS=$(echo "$RESPONSE" | python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              print(data['content'][0]['text'])
+          except Exception as e:
+              print(f'Erro ao parsear resposta da API: {e}')
+              print('Resposta bruta:', sys.stdin.read()[:500])
+          " 2>/dev/null || echo "Não foi possível obter análise da API.")
+
+          # Salva para o próximo step
+          echo "$ANALYSIS" > analysis.txt
+          echo "Análise concluída"
+
+      - name: Postar análise no Summary
+        if: always()
+        run: |
+          ANALYSIS=$(cat analysis.txt 2>/dev/null || echo "Análise não disponível.")
+
+          cat >> $GITHUB_STEP_SUMMARY << SUMMARY
+          ## ❌ Build Falhou — Análise Automática
+
+          **Commit:** \`${{ github.sha }}\`
+          **Autor:** ${{ github.actor }}
+          **Run:** [Ver detalhes completos](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ---
+
+          $ANALYSIS
+
+          ---
+
+          > 📎 O log completo está disponível como artifact \`error-log\` neste run.
+          SUMMARY
+
+          echo "✅ Análise postada no Summary"
+
+# ── JOB 3: Homologação ─────────────────────────────────────────
   homologacao:
     name: 🧪 Homologação
     runs-on: ubuntu-latest
     needs: build
-    # Só roda em push para main (não em PRs)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.result == 'success'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: API Check de Homologação
         id: api-check
         env:
           HOMOLOG_API_URL:   ${{ secrets.HOMOLOG_API_URL }}
           HOMOLOG_API_TOKEN: ${{ secrets.HOMOLOG_API_TOKEN }}
         run: |
-          # ── Se o secret ainda não estiver configurado, passa direto ──
           if [ -z "$HOMOLOG_API_URL" ]; then
             echo "⚠️  HOMOLOG_API_URL não configurado — etapa pulada"
             echo "result=skipped" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "🔍 Chamando API de homologação: $HOMOLOG_API_URL"
+          echo "🔍 Chamando API de homologação..."
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             --max-time 60 \
@@ -127,15 +256,15 @@ jobs:
           echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Autor:  \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
 
-  # ── JOB 3: Deploy → Produção ─────────────────────────────────
+# ── JOB 4: Deploy → Produção ───────────────────────────────────
   deploy:
     name: 🚀 Deploy → Produção
     runs-on: ubuntu-latest
     needs: [build, homologacao]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.homologacao.result == 'success'
 
     steps:
-      - name: Download build artifact
+      - name: Download dist
         uses: actions/download-artifact@v4
         with:
           name: dist
@@ -150,7 +279,7 @@ jobs:
             exit 1
           fi
 
-          git config --global user.email "ci-bot@saas-tecnica"
+          git config --global user.email "ci-bot@portalcrm"
           git config --global user.name  "CI/CD Bot"
 
           cd dist
@@ -161,7 +290,6 @@ jobs:
 
           git checkout -b main
 
-          # Arquivo de rastreio do deploy
           cat > .deploy-info.json << DEPEOF
           {
             "source_repo":   "${{ github.repository }}",
@@ -182,6 +310,9 @@ jobs:
 
           git push --force origin main
 
+      - name: Resumo do deploy
+        run: |
           echo "### 🚀 Deploy concluído" >> $GITHUB_STEP_SUMMARY
           echo "- Produção: https://github.com/TharlysSantos/Saas-Tecnica_Prod" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit:   \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit fonte: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Autor: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

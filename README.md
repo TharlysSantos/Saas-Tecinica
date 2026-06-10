@@ -1,39 +1,25 @@
-**Welcome to your Base44 project** 
+# Portal CRM — Retenção de Assinantes
 
-**About**
+Sistema web para gestão de cancelamentos e retenção de clientes. Permite que times de atendimento acompanhem solicitações, executem workflows de retenção e visualizem métricas em tempo real.
 
-View and Edit  your app on [Base44.com](http://Base44.com) 
+## Início rápido
 
-This project contains everything you need to run your app locally.
-
-**Edit the code in your local development environment**
-
-Any change pushed to the repo will also be reflected in the Base44 Builder.
-
-**Prerequisites:** 
-
-1. Clone the repository using the project's Git URL 
-2. Navigate to the project directory
-3. Install dependencies: `npm install`
-4. Create an `.env.local` file and set the right environment variables
-
-```
-VITE_BASE44_APP_ID=your_app_id
-VITE_BASE44_APP_BASE_URL=your_backend_url
-
-e.g.
-VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
-VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+```bash
+git clone https://github.com/TharlysSantos/Saas-Tecnica.git
+cd Saas-Tecnica
+npm install
+# Criar .env.local com VITE_BASE44_APP_ID e VITE_BASE44_APP_BASE_URL
+npm run dev
 ```
 
-Run the app: `npm run dev`
+## Stack
 
-**Publish your changes**
+React 18 · Vite · Tailwind CSS · shadcn/ui · TanStack Query · Base44
 
-Open [Base44.com](http://Base44.com) and click on Publish.
+## Pipeline
 
-**Docs & Support**
+Todo push para `main` aciona build → lint → homologação → deploy automático para produção.
 
-Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
+## Documentação completa
 
-Support: [https://app.base44.com/support](https://app.base44.com/support)
+Consulte [`CLAUDE.md`](./CLAUDE.md) para arquitetura, secrets, pipeline e padrões de código.
