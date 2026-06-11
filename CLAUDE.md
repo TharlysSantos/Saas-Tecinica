@@ -37,50 +37,60 @@ O sistema usa **Base44** como backend (banco de dados, autenticação, serverles
 
 ```
 /
-├── src/
-│   ├── pages/              # Páginas da aplicação (auto-registradas via pages.config.js)
-│   │   ├── Dashboard.jsx   # Página principal com KPIs e métricas
-│   │   ├── Requests.jsx    # Listagem e gestão de solicitações
-│   │   ├── Actions.jsx     # Workflow board
-│   │   ├── Relatorios.jsx  # Relatórios e analytics
-│   │   ├── Profile.jsx     # Perfil do usuário
-│   │   ├── Settings.jsx    # Configurações do sistema
-│   │   └── ExAssinante.jsx # Gestão de ex-assinantes
-│   ├── components/
-│   │   ├── dashboard/      # Blocos do dashboard (KPIs, gráficos, tabelas)
-│   │   ├── retention/      # Modal e formulários do fluxo de retenção
-│   │   ├── settings/       # Componentes de configuração
-│   │   └── ui/             # shadcn/ui (NÃO editar manualmente)
-│   ├── api/
-│   │   └── base44Client.js # Instância única do SDK Base44
-│   ├── lib/
-│   │   ├── AuthContext.jsx  # Context de autenticação
-│   │   ├── utils.js         # Helpers (cn, etc.)
-│   │   └── query-client.js  # Configuração do React Query
-│   ├── hooks/              # Custom hooks
-│   ├── utils/index.ts      # Utilitários gerais
-│   ├── App.jsx             # Root com router e providers
-│   ├── Layout.jsx          # Layout principal (sidebar + header)
-│   ├── pages.config.js     # Registro de páginas (AUTO-GERADO — ver regra abaixo)
-│   ├── index.css           # Variáveis CSS do tema (customizável)
-│   └── main.jsx            # Entry point
-├── base44/
-│   ├── entities/           # Definições das entidades do banco
-│   ├── functions/          # Serverless functions
-│   ├── config.jsonc        # Config do projeto Base44
-│   └── .app.jsonc          # ID do app Base44
+├── frontend/                        # Toda a aplicação React
+│   ├── src/
+│   │   ├── pages/                   # Páginas (auto-registradas via pages.config.js)
+│   │   │   ├── Dashboard.jsx        # KPIs e métricas
+│   │   │   ├── Requests.jsx         # Gestão de solicitações
+│   │   │   ├── Actions.jsx          # Workflow board
+│   │   │   ├── Relatorios.jsx       # Relatórios e analytics
+│   │   │   ├── Profile.jsx          # Perfil do usuário
+│   │   │   ├── Settings.jsx         # Configurações do sistema
+│   │   │   └── ExAssinante.jsx      # Gestão de ex-assinantes
+│   │   ├── components/
+│   │   │   ├── dashboard/           # Blocos do dashboard (KPIs, gráficos, tabelas)
+│   │   │   ├── retention/           # Modal e formulários do fluxo de retenção
+│   │   │   ├── settings/            # Componentes de configuração
+│   │   │   └── ui/                  # shadcn/ui — NÃO editar manualmente
+│   │   ├── api/
+│   │   │   └── base44Client.js      # Instância única do SDK Base44
+│   │   ├── lib/
+│   │   │   ├── AuthContext.jsx       # Context de autenticação
+│   │   │   ├── utils.js             # Helpers (cn, etc.)
+│   │   │   └── query-client.js      # Configuração do React Query
+│   │   ├── hooks/                   # Custom hooks
+│   │   ├── utils/index.ts           # Utilitários gerais
+│   │   ├── App.jsx                  # Root com router e providers
+│   │   ├── Layout.jsx               # Layout principal (sidebar + header)
+│   │   ├── pages.config.js          # Registro de páginas (AUTO-GERADO)
+│   │   ├── index.css                # Variáveis CSS do tema (customizável)
+│   │   └── main.jsx                 # Entry point
+│   ├── index.html                   # HTML template
+│   ├── vite.config.js               # Config do Vite + Base44 plugin
+│   ├── tailwind.config.js
+│   ├── eslint.config.js
+│   ├── package.json                 # Dependências e scripts npm
+│   └── components.json              # Config shadcn/ui
+│
+├── backend/                         # Backend Base44
+│   ├── entities/                    # Definições das entidades (banco de dados)
+│   ├── functions/                   # Serverless functions Base44
+│   ├── config.jsonc                 # Config do projeto Base44
+│   └── .app.jsonc                   # ID do app Base44
+│
 ├── .github/
 │   └── workflows/
-│       └── ci-cd.yml       # Pipeline CI/CD (ver Seção 7)
-├── CLAUDE.md               # Este arquivo
-└── README.md               # Visão geral pública
+│       └── ci-cd.yml                # Pipeline CI/CD (ver Seção 7)
+├── CLAUDE.md                        # Este arquivo — fonte de verdade
+└── README.md                        # Visão geral pública
 ```
 
 ### ⚠️ Regras importantes de arquivos
 
-- **`pages.config.js`** é auto-gerado pelo Base44. A única coisa editável é `mainPage`. Não adicionar imports manualmente.
-- **`src/components/ui/`** são componentes shadcn/ui. Não editar — se precisar customizar, criar um wrapper.
-- **`base44/entities/`** define o schema do banco. Alterações aqui impactam o backend.
+- **`frontend/src/pages.config.js`** é auto-gerado pelo Base44. A única coisa editável é `mainPage`. Não adicionar imports manualmente.
+- **`frontend/src/components/ui/`** são componentes shadcn/ui. Não editar — se precisar customizar, criar um wrapper.
+- **`backend/entities/`** define o schema do banco. Alterações aqui impactam o backend Base44.
+- Todos os comandos npm (`install`, `build`, `lint`, `dev`) devem ser executados dentro de `frontend/`.
 
 ---
 
@@ -129,7 +139,7 @@ VITE_BASE44_APP_BASE_URL=https://[seu-app].base44.app
 
 ```bash
 git clone https://github.com/TharlysSantos/Saas-Tecnica.git
-cd Saas-Tecnica
+cd Saas-Tecnica/frontend
 npm install
 cp .env.example .env.local   # editar com os valores corretos
 npm run dev
@@ -154,7 +164,7 @@ Todo push para `main` aciona o workflow `.github/workflows/ci-cd.yml`:
 ```
 Push → main
   │
-  ├─ Job: build
+  ├─ Job: build  (working-directory: ./frontend)
   │   ├─ npm ci
   │   ├─ npm run lint
   │   └─ npm run build
@@ -213,7 +223,7 @@ As variáveis do tema ficam em `src/index.css` (seção `:root`). Alterar lá re
 }
 ```
 
-Use o **Preview Interativo** (artifact do Cowork) para testar cores e labels antes de alterar os arquivos — o painel "Código" gera o diff exato para colar no `index.css`.
+Use o **Preview Interativo** (artifact do Cowork) para testar cores e labels antes de alterar os arquivos — o painel "Código" gera o diff exato para colar no `frontend/src/index.css`.
 
 ---
 
@@ -236,8 +246,8 @@ Se você é um agente de IA trabalhando neste repositório, siga estas diretrize
 1. **Nunca edite `pages.config.js` manualmente** a não ser para mudar `mainPage`.
 2. **Sempre use o Base44 SDK** para operações de dados — nunca fetch direto para o backend.
 3. **Mantenha a estrutura de pastas** — componentes específicos de feature ficam em subpastas de `components/`.
-4. **Ao adicionar uma nova página**: criar o arquivo em `src/pages/`, adicionar o import e a entrada em `PAGES` no `pages.config.js`, e adicionar o item de navegação em `Layout.jsx` (`NAV_BY_ENV.retencao`).
-5. **Ao alterar o tema**: propor alterações em `src/index.css` (variáveis CSS) e em `Layout.jsx` (se for estrutural).
+4. **Ao adicionar uma nova página**: criar o arquivo em `frontend/src/pages/`, adicionar o import e a entrada em `PAGES` no `frontend/src/pages.config.js`, e adicionar o item de navegação em `frontend/src/Layout.jsx` (`NAV_BY_ENV.retencao`).
+5. **Ao alterar o tema**: propor alterações em `frontend/src/index.css` (variáveis CSS) e em `frontend/src/Layout.jsx` (se for estrutural).
 6. **Commits**: sempre mensagem em inglês no formato `tipo: descrição` (feat, fix, ci, docs, style, refactor).
 7. **Este arquivo (`CLAUDE.md`) deve ser atualizado** quando há mudanças estruturais (novas entidades, novos secrets, mudanças no pipeline).
 

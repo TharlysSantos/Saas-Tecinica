@@ -2,12 +2,15 @@
 # CI/CD Pipeline — Portal CRM (Saas-Tecnica)
 # Documentação: CLAUDE.md → Seção 7
 #
+# Estrutura do repo:
+#   frontend/ → código React, Vite, package.json
+#   backend/  → entidades e funções Base44
+#
 # Quando falha:  cria Issue com label ci-error → agente Claude detecta
-#                e traz para o Cowork para correção
-# Quando passa:  chama API de notificação informando aprovação
+# Quando passa:  chama NOTIFY_API_URL informando aprovação
 #
 # Secrets (Settings → Secrets → Actions):
-#   NOTIFY_API_URL    → endpoint que recebe o aviso de aprovação
+#   NOTIFY_API_URL    → endpoint de notificação de aprovação
 #   NOTIFY_API_TOKEN  → token Bearer para a API acima
 #   HOMOLOG_API_URL   → endpoint de homologação (opcional por ora)
 #   HOMOLOG_API_TOKEN → token para homologação
@@ -23,12 +26,16 @@ on:
 
 env:
   NODE_VERSION: '20'
+  WORKING_DIR: ./frontend
 
 jobs:
   # ── JOB 1: Build & Lint ────────────────────────────────────────
   build:
     name: 🔨 Build & Lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
 
     steps:
       - name: Checkout
@@ -39,6 +46,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -56,6 +64,7 @@ jobs:
       - name: Montar log de erro
         id: error-log
         if: steps.lint.outcome == 'failure' || steps.build.outcome == 'failure'
+        working-directory: ${{ github.workspace }}
         run: |
           {
             echo "## Lint"
@@ -120,7 +129,16 @@ jobs:
 
       - name: Falhar o job se houve erro
         if: steps.error-log.outputs.has_error == 'true'
+        working-directory: ${{ github.workspace }}
         run: exit 1
+
+      - name: Upload dist
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: frontend/dist/
+          retention-days: 1
 
   # ── JOB 2: Homologação ─────────────────────────────────────────
   homologacao:
@@ -144,7 +162,6 @@ jobs:
             echo "result=skipped" >> $GITHUB_OUTPUT
             exit 0
           fi
-
           RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 60 \
             -X POST "$HOMOLOG_API_URL" \
             -H "Authorization: Bearer $HOMOLOG_API_TOKEN" \
@@ -156,7 +173,6 @@ jobs:
               \"actor\":  \"${{ github.actor }}\",
               \"run_id\": \"${{ github.run_id }}\"
             }")
-
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           echo "HTTP: $HTTP_CODE"
           [ "$HTTP_CODE" = "200" ] \
@@ -184,29 +200,24 @@ jobs:
           NOTIFY_API_TOKEN: ${{ secrets.NOTIFY_API_TOKEN }}
         run: |
           if [ -z "$NOTIFY_API_URL" ]; then
-            echo "⚠️  NOTIFY_API_URL não configurado — notificação pulada"
+            echo "⚠️  NOTIFY_API_URL não configurado — pulado"
             exit 0
           fi
-
           COMMIT_MSG=$(git log -1 --pretty=%B | head -1)
-
-          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 \
+          curl -s --max-time 30 \
             -X POST "$NOTIFY_API_URL" \
             -H "Authorization: Bearer $NOTIFY_API_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
-              \"event\":      \"build_approved\",
-              \"repo\":       \"${{ github.repository }}\",
-              \"commit\":     \"${{ github.sha }}\",
-              \"branch\":     \"${{ github.ref_name }}\",
-              \"actor\":      \"${{ github.actor }}\",
-              \"message\":    \"$COMMIT_MSG\",
-              \"run_id\":     \"${{ github.run_id }}\",
-              \"run_url\":    \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
-            }")
-
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          echo "Notificação enviada — HTTP $HTTP_CODE"
+              \"event\":   \"build_approved\",
+              \"repo\":    \"${{ github.repository }}\",
+              \"commit\":  \"${{ github.sha }}\",
+              \"branch\":  \"${{ github.ref_name }}\",
+              \"actor\":   \"${{ github.actor }}\",
+              \"message\": \"$COMMIT_MSG\",
+              \"run_id\":  \"${{ github.run_id }}\",
+              \"run_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"
 
       - name: Fechar issue ci-error se existir
         uses: actions/github-script@v7
@@ -220,12 +231,12 @@ jobs:
               await github.rest.issues.update({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number, state: 'closed',
-                body: issue.body + `\n\n> ✅ Resolvido — build aprovado em \`${{ github.sha }}\``
+                body: issue.body + `\n\n> ✅ Resolvido em \`${{ github.sha }}\``
               });
             }
 
       - name: Resumo
         run: |
-          echo "### ✅ Build aprovado e API notificada" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Build aprovado" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Autor: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
