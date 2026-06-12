@@ -254,3 +254,5 @@ Se você é um agente de IA trabalhando neste repositório, siga estas diretrize
 ---
 
 *Última atualização: gerado automaticamente pelo agente Claude (Cowork)*
+
+<!-- last-validated: 2026-06-12T15:01:47Z -->
